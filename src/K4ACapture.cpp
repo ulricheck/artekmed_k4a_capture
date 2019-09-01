@@ -38,7 +38,7 @@ private:
     k4a::device m_dev;
 
     std::shared_ptr<nvenc_rtsp::ServerPipeRTSP> m_colorStream;
-    std::shared_ptr<nvenc_rtsp::ServerPipeRTSP> m_depthEncoder;
+    std::shared_ptr<nvenc_rtsp::ServerPipeRTSP> m_depthStream;
 
     std::string m_ipAddress{"127.0.0.1"};
     unsigned int m_dstPort{55555};
@@ -96,17 +96,54 @@ int MyApplication::exec() {
     try{
         if (m_debug) {
             cv::namedWindow("ColorImage",cv::WINDOW_NORMAL);
+            cv::namedWindow("DepthImage",cv::WINDOW_NORMAL);
         }
+        cv::Mat colorImage;
+        cv::Mat depthImage;
 
         k4a::capture capture;
         for(;;) {
             if (m_dev.get_capture(&capture, std::chrono::milliseconds(50)))
             {
+
+                // Depth Image Stream
                 {
-                    const k4a::image depthImage = capture.get_depth_image();
 
-                    // do something with the images..
+                    NvPipe_Format nvpFormat{NVPIPE_RGBA32};
 
+                    const k4a::image inputImage = capture.get_depth_image();
+                    int w = inputImage.get_width_pixels();
+                    int h = inputImage.get_height_pixels();
+
+
+                    switch (inputImage.get_format()) {
+                        case K4A_IMAGE_FORMAT_DEPTH16:
+                            depthImage = cv::Mat(cv::Size(w, h), CV_16UC1, (void *)inputImage.get_buffer(), cv::Mat::AUTO_STEP);
+                            nvpFormat = NVPIPE_UINT16;
+                            break;
+
+                        case K4A_IMAGE_FORMAT_IR16:
+                        case K4A_IMAGE_FORMAT_COLOR_BGRA32:
+                        case K4A_IMAGE_FORMAT_COLOR_MJPG:
+                        case K4A_IMAGE_FORMAT_COLOR_NV12:
+                        case K4A_IMAGE_FORMAT_COLOR_YUY2:
+//                case K4A_IMAGE_FORMAT_CUSTOM8:
+//                case K4A_IMAGE_FORMAT_CUSTOM16:
+                        case K4A_IMAGE_FORMAT_CUSTOM:
+                        default:
+                            throw std::runtime_error("kinect4azure depth frame format is (currently) not supported!");
+                    }
+
+                    if (!m_depthStream) {
+                        m_depthStream = std::make_shared<nvenc_rtsp::ServerPipeRTSP>(m_ipAddress, m_dstPort, nvpFormat, NVPIPE_LOSSLESS, NVPIPE_H264, m_bitrate, m_framerate);
+                    }
+
+                    unsigned long ts = inputImage.get_system_timestamp().count();
+                    m_depthStream->send_frame(depthImage);
+                    if (m_debug) {
+                        Magnum::Debug{} << "got depth image: " << ts << "elemSize: " << depthImage.elemSize()  << "elemSize1: " << depthImage.elemSize1();
+                        cv::imshow("DepthImage", depthImage);
+                    }
                 }
 
                 {
@@ -115,8 +152,6 @@ int MyApplication::exec() {
                     const k4a::image inputImage = capture.get_color_image();
                     int w = inputImage.get_width_pixels();
                     int h = inputImage.get_height_pixels();
-
-                    cv::Mat colorImage;
 
                     switch (inputImage.get_format()) {
                         case K4A_IMAGE_FORMAT_COLOR_BGRA32:
@@ -129,10 +164,6 @@ int MyApplication::exec() {
 
                         case K4A_IMAGE_FORMAT_DEPTH16:
                         case K4A_IMAGE_FORMAT_IR16:
-                            colorImage = cv::Mat(cv::Size(w, h), CV_16UC1, (void *)inputImage.get_buffer(), cv::Mat::AUTO_STEP);
-                            nvpFormat = NVPIPE_UINT16;
-                            break;
-
                         case K4A_IMAGE_FORMAT_COLOR_MJPG:
                         case K4A_IMAGE_FORMAT_COLOR_NV12:
                         case K4A_IMAGE_FORMAT_COLOR_YUY2:
@@ -140,17 +171,17 @@ int MyApplication::exec() {
 //                case K4A_IMAGE_FORMAT_CUSTOM16:
                         case K4A_IMAGE_FORMAT_CUSTOM:
                         default:
-                            throw std::runtime_error("kinect4azure frame format is (currently) not supported!");
+                            throw std::runtime_error("kinect4azure color frame format is (currently) not supported!");
                     }
 
                     if (!m_colorStream) {
-                        m_colorStream = std::make_shared<nvenc_rtsp::ServerPipeRTSP>(m_ipAddress, m_dstPort, nvpFormat, NVPIPE_LOSSLESS, NVPIPE_H264, m_bitrate, m_framerate);
+                        m_colorStream = std::make_shared<nvenc_rtsp::ServerPipeRTSP>(m_ipAddress, m_dstPort+1, nvpFormat, NVPIPE_LOSSLESS, NVPIPE_H264, m_bitrate, m_framerate);
                     }
 
                     unsigned long ts = inputImage.get_system_timestamp().count();
                     m_colorStream->send_frame(colorImage);
                     if (m_debug) {
-                        Magnum::Debug{} << "got pair of images: " << ts << "elemSize: " << colorImage.elemSize()  << "elemSize1: " << colorImage.elemSize1();
+                        Magnum::Debug{} << "got color images: " << ts << "elemSize: " << colorImage.elemSize()  << "elemSize1: " << colorImage.elemSize1();
                         cv::Mat rgb;
                         colorImage.convertTo(rgb, CV_RGBA2RGB);
                         cv::imshow("ColorImage", rgb);
