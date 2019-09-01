@@ -21,6 +21,7 @@ class ArtekmedP02Conan(ConanFile):
         "magnum/2019.01@camposs/stable",
         "corrade/2019.01@camposs/stable",
         "opencv/3.4.3@camposs/stable",
+        "nvenc_rtsp/0.1@artekmed/stable",
         "kinect-azure-sensor-sdk/1.2.0@camposs/stable",
         )
 
@@ -46,6 +47,7 @@ class ArtekmedP02Conan(ConanFile):
     def configure(self):
         if self.settings.os == "Linux":
             self.options["opencv"].with_gtk = True
+            self.options['magnum'].with_windowlessglxapplication = True
 
         if self.settings.os == "Windows":
             self.options['magnum'].with_windowlesswglapplication = True
