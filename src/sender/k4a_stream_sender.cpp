@@ -44,7 +44,12 @@ private:
     unsigned int m_dstPort{55555};
     unsigned int m_bitrate{50};
     unsigned int m_framerate{30};
+
     bool m_debug{false};
+
+    bool m_depthStreamEnabled{true};
+    bool m_colorStreamEnabled{true};
+
 };
 
 K4AStreamSender::K4AStreamSender(const Arguments &arguments) : Platform::WindowlessApplication{arguments} {
@@ -52,6 +57,8 @@ K4AStreamSender::K4AStreamSender(const Arguments &arguments) : Platform::Windowl
     args.addOption("ip", "127.0.0.1").setHelp("ip", "IP Address to bind to")
         .addOption("port", "55555").setHelp("port", "Port to bind to")
         .addBooleanOption("debug").setHelp("debug", "Show debug windows")
+        .addBooleanOption("nodepth").setHelp("nodepth", "Skip depth stream")
+        .addBooleanOption("nocolor").setHelp("nocolor", "Skip color stream")
         .addSkippedPrefix("magnum", "engine-specific options");
 
     args.parse(arguments.argc, arguments.argv);
@@ -59,6 +66,8 @@ K4AStreamSender::K4AStreamSender(const Arguments &arguments) : Platform::Windowl
     m_ipAddress = args.value("ip");
     m_dstPort = args.value<Magnum::Int>("port");
     m_debug = args.isSet("debug");
+    m_depthStreamEnabled = !args.isSet("nodepth");
+    m_colorStreamEnabled = !args.isSet("nocolor");
 
     // Check for devices
     //
@@ -107,7 +116,7 @@ int K4AStreamSender::exec() {
             {
 
                 // Depth Image Stream
-                {
+                if (m_depthStreamEnabled) {
 
                     NvPipe_Format nvpFormat{NVPIPE_RGBA32};
 
@@ -146,7 +155,7 @@ int K4AStreamSender::exec() {
                     }
                 }
 
-                {
+                if (m_colorStreamEnabled) {
                     NvPipe_Format nvpFormat{NVPIPE_RGBA32};
 
                     const k4a::image inputImage = capture.get_color_image();
@@ -183,7 +192,7 @@ int K4AStreamSender::exec() {
                     if (m_debug) {
                         Magnum::Debug{} << "got color images: " << ts << "elemSize: " << colorImage.elemSize()  << "elemSize1: " << colorImage.elemSize1();
                         cv::Mat rgb;
-                        colorImage.convertTo(rgb, CV_RGBA2RGB);
+                        cv::cvtColor(colorImage, rgb, cv::COLOR_RGBA2BGR);
                         cv::imshow("ColorImage", rgb);
                         if(cv::waitKey(5) >= 0) break;
 
