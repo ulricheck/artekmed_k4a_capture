@@ -1,6 +1,7 @@
 
 #include <Corrade/configure.h>
 #include <Corrade/Utility/Arguments.h>
+#include <Corrade/Utility/System.h>
 
 #include <Magnum/GL/DefaultFramebuffer.h>
 
@@ -184,7 +185,6 @@ K4AStreamReceiver::K4AStreamReceiver(const Arguments &arguments) : Platform::Glf
 }
 
 void K4AStreamReceiver::drawEvent() {
-    Magnum::Debug{} << "Begin drawEvent";
     forwardCompletedFrames();
 
     if (!m_resultQueue.empty()) {
