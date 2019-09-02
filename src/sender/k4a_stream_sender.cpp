@@ -29,9 +29,9 @@
 
 using namespace Magnum;
 
-class MyApplication : public Platform::WindowlessApplication {
+class K4AStreamSender : public Platform::WindowlessApplication {
 public:
-    explicit MyApplication(const Arguments &arguments);
+    explicit K4AStreamSender(const Arguments &arguments);
     int exec() override;
 
 private:
@@ -47,7 +47,7 @@ private:
     bool m_debug{false};
 };
 
-MyApplication::MyApplication(const Arguments &arguments) : Platform::WindowlessApplication{arguments} {
+K4AStreamSender::K4AStreamSender(const Arguments &arguments) : Platform::WindowlessApplication{arguments} {
     Magnum::Utility::Arguments args;
     args.addOption("ip", "127.0.0.1").setHelp("ip", "IP Address to bind to")
         .addOption("port", "55555").setHelp("port", "Port to bind to")
@@ -90,7 +90,7 @@ MyApplication::MyApplication(const Arguments &arguments) : Platform::WindowlessA
 
 }
 
-int MyApplication::exec() {
+int K4AStreamSender::exec() {
     Magnum::Debug{} << "Start Streaming";
 
     try{
@@ -202,4 +202,4 @@ int MyApplication::exec() {
     return 0;
 }
 
-MAGNUM_WINDOWLESSAPPLICATION_MAIN(MyApplication)
+MAGNUM_WINDOWLESSAPPLICATION_MAIN(K4AStreamSender)
