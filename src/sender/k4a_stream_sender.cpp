@@ -2,7 +2,6 @@
 #include <Corrade/configure.h>
 #include <Corrade/Utility/Arguments.h>
 
-#include <Magnum/GL/DefaultFramebuffer.h>
 
 #ifdef CORRADE_TARGET_UNIX
 #include <Magnum/Platform/WindowlessGlxApplication.h>
@@ -12,13 +11,10 @@
 #endif
 
 
-#include <Magnum/ImageView.h>
-#include <Magnum/PixelFormat.h>
 #include <Magnum/GL/PixelFormat.h>
 
 
 #include <memory>
-#include <iostream>
 #include <vector>
 #include <chrono>
 
@@ -26,6 +22,7 @@
 #include <opencv2/opencv.hpp>
 #include "nvenc_rtsp/ServerPipeRTSP.h"
 
+#include "MsgpackSerialization.h"
 
 using namespace Magnum;
 
