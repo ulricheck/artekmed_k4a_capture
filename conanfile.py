@@ -23,6 +23,9 @@ class ArtekmedP02Conan(ConanFile):
         "opencv/3.4.3@camposs/stable",
         "nvenc_rtsp/0.1@artekmed/stable",
         "kinect-azure-sensor-sdk/1.2.0@camposs/stable",
+        "msgpack/3.2.0@camposs/stable",
+        "zmq/4.3.2@camposs/stable",
+        "cppzmq/4.4.1@camposs/stable",
         )
 
     default_options = {
