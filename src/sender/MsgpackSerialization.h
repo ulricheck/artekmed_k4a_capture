@@ -70,9 +70,6 @@ namespace msgpack {
                 msgpack::packer<Stream> &
                 operator()(msgpack::packer<Stream> &o, const Magnum::Math::Vector<N, T> &v) const {
                     std::size_t num_elements = N;
-                    if (num_elements == 0) {
-                        num_elements = v.size();
-                    }
                     o.pack_array(static_cast<uint32_t>(num_elements));
                     for (std::size_t i = 0; i < num_elements; ++i) {
                         o.pack(v[i]);
@@ -265,7 +262,7 @@ namespace msgpack {
 
 
 /*
- * Ubitrack::Math::Pose
+ * Ubitrack::Math::Pose (pack only)
  */
 
 
@@ -291,8 +288,8 @@ namespace msgpack {
                     }
 
                     // convert matrix to quaternion
-                    auto mat = Magnum::Matrix3x3d::from(&rotation[0]);
-                    auto q = Magnum::Quaterniond::fromMatrix(mat);
+                    auto mat = Magnum::Matrix3x3d::from(&rotation[0]).transposed();
+                    auto q = Magnum::Quaterniond::fromMatrix(mat).normalized();
 
                     o.pack_array(2);
                     o.pack(q);
@@ -315,8 +312,8 @@ namespace msgpack {
                     }
 
                     // convert matrix to quaternion
-                    auto mat = Magnum::Matrix3x3d::from(&rotation[0]);
-                    auto q = Magnum::Quaterniond::fromMatrix(mat);
+                    auto mat = Magnum::Matrix3x3d::from(&rotation[0]).transposed();
+                    auto q = Magnum::Quaterniond::fromMatrix(mat).normalized();
 
                     o.type = type::ARRAY;
                     o.via.array.size = 2;
@@ -330,7 +327,7 @@ namespace msgpack {
 
 
 /*
- * Ubitrack::Math::CameraIntrinsics<T>
+ * Ubitrack::Math::CameraIntrinsics<T> (pack only)
  */
 
 //typedef union
