@@ -9,6 +9,7 @@
 #include <Magnum/Math/Quaternion.h>
 #include <Magnum/Math/Vector.h>
 #include <Magnum/Math/RectangularMatrix.h>
+#include <Magnum/Math/Matrix3.h>
 
 #include <k4a/k4a.hpp>
 #include <msgpack.hpp>
@@ -277,22 +278,32 @@ namespace msgpack {
                 template<typename Stream>
                 msgpack::packer<Stream> &
                 operator()(msgpack::packer<Stream> &o, const k4a_calibration_extrinsics_t &v) const {
+                    // convert matrix to quaternion
+                    Magnum::Matrix3x3 rotation{Magnum::Math::ZeroInit};
+                    rotation[0][0] = v.rotation[0];
+                    rotation[0][1] = v.rotation[1];
+                    rotation[0][2] = v.rotation[2];
+                    rotation[1][0] = v.rotation[3];
+                    rotation[1][1] = v.rotation[4];
+                    rotation[1][2] = v.rotation[5];
+                    rotation[2][0] = v.rotation[6];
+                    rotation[2][1] = v.rotation[7];
+                    rotation[2][2] = v.rotation[8];
+
+                    auto q = Magnum::Quaternion::fromMatrix(rotation).normalized();
+
                     // from float to double
-                    std::vector<double> rotation(9);
-                    for (int i = 0; i < 9; i++) {
-                        rotation.at(i) = static_cast<double>(v.rotation[i]);
-                    }
                     Magnum::Math::Vector<3, double> translation{Magnum::Math::ZeroInit};
                     for (int i = 0; i < 3; i++) {
                         translation[i] = static_cast<double>(v.translation[i]);
                     }
 
-                    // convert matrix to quaternion
-                    auto mat = Magnum::Matrix3x3d::from(&rotation[0]).transposed();
-                    auto q = Magnum::Quaterniond::fromMatrix(mat).normalized();
-
+                    auto qd = Magnum::Quaterniond{{static_cast<double>(q.vector().x()),
+                                                          static_cast<double>(q.vector().y()),
+                                                          static_cast<double>(q.vector().z())},
+                                                  static_cast<double>(q.scalar())};
                     o.pack_array(2);
-                    o.pack(q);
+                    o.pack(qd);
                     o.pack(translation);
                     return o;
                 }
@@ -301,25 +312,36 @@ namespace msgpack {
             template<>
             struct object_with_zone<k4a_calibration_extrinsics_t> {
                 void operator()(msgpack::object::with_zone &o, const k4a_calibration_extrinsics_t &v) const {
+                    // convert matrix to quaternion
+                    Magnum::Matrix3x3 rotation{Magnum::Math::ZeroInit};
+                    rotation[0][0] = v.rotation[0];
+                    rotation[0][1] = v.rotation[1];
+                    rotation[0][2] = v.rotation[2];
+                    rotation[1][0] = v.rotation[3];
+                    rotation[1][1] = v.rotation[4];
+                    rotation[1][2] = v.rotation[5];
+                    rotation[2][0] = v.rotation[6];
+                    rotation[2][1] = v.rotation[7];
+                    rotation[2][2] = v.rotation[8];
+
+                    auto q = Magnum::Quaternion::fromMatrix(rotation).normalized();
+
                     // from float to double
-                    std::vector<double> rotation(9);
-                    for (int i = 0; i < 9; i++) {
-                        rotation.at(i) = static_cast<double>(v.rotation[i]);
-                    }
                     Magnum::Math::Vector<3, double> translation{Magnum::Math::ZeroInit};
                     for (int i = 0; i < 3; i++) {
                         translation[i] = static_cast<double>(v.translation[i]);
                     }
 
-                    // convert matrix to quaternion
-                    auto mat = Magnum::Matrix3x3d::from(&rotation[0]).transposed();
-                    auto q = Magnum::Quaterniond::fromMatrix(mat).normalized();
+                    auto qd = Magnum::Quaterniond{{static_cast<double>(q.vector().x()),
+                                                   static_cast<double>(q.vector().y()),
+                                                   static_cast<double>(q.vector().z())},
+                                                  static_cast<double>(q.scalar())};
 
                     o.type = type::ARRAY;
                     o.via.array.size = 2;
                     o.via.array.ptr = static_cast<msgpack::object *>(
                             o.zone.allocate_align(sizeof(msgpack::object) * o.via.array.size));
-                    o.via.array.ptr[0] = msgpack::object(q, o.zone);
+                    o.via.array.ptr[0] = msgpack::object(qd, o.zone);
                     o.via.array.ptr[1] = msgpack::object(translation, o.zone);
                 }
             };
