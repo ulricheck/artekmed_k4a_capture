@@ -185,7 +185,11 @@ int K4AStreamSender::exec() {
         for(;;) {
             if (m_dev.get_capture(&capture, std::chrono::milliseconds(50)))
             {
-                bool do_send_config = (frame_number % m_framerate == 0);
+                bool do_send_config = false;
+                if ((frame_number % m_framerate) == 0) {
+                    do_send_config = true;
+                    Magnum::Debug{} << "Send config " << frame_number;
+                }
 
                 // Depth Image Stream
                 if (m_depthStreamEnabled) {
@@ -196,10 +200,16 @@ int K4AStreamSender::exec() {
                     if (do_send_config) {
                         // depth model
                         {
-                            std::stringstream stream;
-                            msgpack::pack(stream, "depth_model");
-                            msgpack::pack(stream, calibration.depth_camera_calibration);
-                            msgpack::pack(stream, ts);
+                            std::ostringstream stream;
+                            msgpack::packer<std::ostringstream> pk(&stream);
+                            pk.pack("depth_model");
+
+                            // measurement
+                            pk.pack_array(2);
+                            pk.pack((unsigned long long) ts);
+                            pk.pack(calibration.depth_camera_calibration);
+
+                            pk.pack(ts);
 
                             zmq::message_t message(stream.str().size());
                             memcpy(message.data(), stream.str().data(), stream.str().size() );
@@ -211,10 +221,16 @@ int K4AStreamSender::exec() {
 
                         // depth2color transform
                         {
-                            std::stringstream stream;
-                            msgpack::pack(stream, "depth2color");
-                            msgpack::pack(stream, calibration.extrinsics[K4A_CALIBRATION_TYPE_DEPTH][K4A_CALIBRATION_TYPE_COLOR]);
-                            msgpack::pack(stream, ts);
+                            std::ostringstream stream;
+                            msgpack::packer<std::ostringstream> pk(&stream);
+                            pk.pack("depth2color");
+
+                            // measurement
+                            pk.pack_array(2);
+                            pk.pack((unsigned long long) ts);
+                            pk.pack(calibration.extrinsics[K4A_CALIBRATION_TYPE_DEPTH][K4A_CALIBRATION_TYPE_COLOR]);
+
+                            pk.pack(ts);
 
                             zmq::message_t message(stream.str().size());
                             memcpy(message.data(), stream.str().data(), stream.str().size() );
@@ -267,10 +283,16 @@ int K4AStreamSender::exec() {
                     if (do_send_config) {
                         // color model
                         {
-                            std::stringstream stream;
-                            msgpack::pack(stream, "color_model");
-                            msgpack::pack(stream, calibration.color_camera_calibration);
-                            msgpack::pack(stream, ts);
+                            std::ostringstream stream;
+                            msgpack::packer<std::ostringstream> pk(&stream);
+                            pk.pack("color_model");
+
+                            // measurement
+                            pk.pack_array(2);
+                            pk.pack((unsigned long long) ts);
+                            pk.pack(calibration.color_camera_calibration);
+
+                            pk.pack(ts);
 
                             zmq::message_t message(stream.str().size());
                             memcpy(message.data(), stream.str().data(), stream.str().size() );
@@ -323,6 +345,9 @@ int K4AStreamSender::exec() {
             } else {
                 Magnum::Debug{} << "No Frame received for 50ms.";
             }
+
+            // increase frame counter
+            frame_number++;
         }
     } catch (std::exception &e) {
         Magnum::Debug{} << "Exception: " << e.what();
