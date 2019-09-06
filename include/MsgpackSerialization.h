@@ -20,6 +20,30 @@ enum CalibType {
     UNKNOWN, OPENCV_2_2, OPENCV_3_2, OPENCV_6_2, OPENCV_4_0_FISHEYE
 };
 
+// from utCore/Measurement/MeasurementTraits.h
+enum class MeasurementType {
+    Undefined = 0,
+    ScalarInt,
+    ScalarDouble,
+    ScalarUnsignedLong,
+    Vector2,
+    Vector3,
+    Vector4,
+    Vector8,
+    Quaternion,
+    Matrix3x3,
+    Matrix3x4,
+    Matrix4x4,
+    Pose,
+    ErrorPose,
+    ErrorVector2,
+    ErrorVector3,
+    RotationVelocity,
+    CameraIntrinsics,
+    Image // Forward declaration as we cannot extend an enumeration later
+};
+
+
 namespace msgpack {
     MSGPACK_API_VERSION_NAMESPACE(MSGPACK_DEFAULT_API_NS) {
         namespace adaptor {

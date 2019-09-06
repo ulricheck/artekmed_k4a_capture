@@ -18,20 +18,21 @@
 #include <vector>
 #include <chrono>
 #include <sstream>
+#include <thread>
 
 #include <k4a/k4a.hpp>
 #include <opencv2/opencv.hpp>
 #include "nvenc_rtsp/ServerPipeRTSP.h"
 
 #include "MsgpackSerialization.h"
-#include <zmq.hpp>
 
+#include <boost/asio.hpp>
+#include <boost/bind.hpp>
+#include <azmq/socket.hpp>
 
-#ifndef ZMQNETWORK_IOTHREADS
-#define ZMQNETWORK_IOTHREADS 2
-#endif
 
 using namespace Magnum;
+
 
 class K4AStreamSender : public Platform::WindowlessApplication {
 public:
@@ -39,14 +40,22 @@ public:
     int exec() override;
 
 private:
+
+//    void receivePushMessage();
+//    void handlePullRequest();
+
+    void watchdogTimer();
+
     k4a::device m_dev;
     k4a_device_configuration_t m_dev_config{K4A_DEVICE_CONFIG_INIT_DISABLE_ALL};
 
     std::shared_ptr<nvenc_rtsp::ServerPipeRTSP> m_colorStream;
     std::shared_ptr<nvenc_rtsp::ServerPipeRTSP> m_depthStream;
 
-    std::shared_ptr<zmq::context_t> m_zmq_context;
-    std::shared_ptr<zmq::socket_t> m_zmq_pub_socket;
+    std::shared_ptr<std::thread > m_NetworkThread;
+    std::shared_ptr<boost::asio::io_service> m_ioservice;
+    std::shared_ptr<boost::asio::deadline_timer> m_ioserviceKeepAlive;
+    std::shared_ptr<azmq::socket> m_zmq_pub_socket;
 
     std::string m_cameraSerialNumber{""};
     std::string m_ipAddress{"127.0.0.1"};
@@ -85,6 +94,14 @@ K4AStreamSender::K4AStreamSender(const Arguments &arguments) : Platform::Windowl
     m_debug = args.isSet("debug");
     m_depthStreamEnabled = !args.isSet("nodepth");
     m_colorStreamEnabled = !args.isSet("nocolor");
+
+    // start communication services
+    Magnum::Debug{} << "Create IOService";
+    m_ioservice.reset(new boost::asio::io_service());
+    m_ioserviceKeepAlive.reset(new boost::asio::deadline_timer(*m_ioservice));
+    watchdogTimer();
+    m_NetworkThread = std::make_shared< std::thread >( [&]{ m_ioservice->run(); } );
+    m_zmq_pub_socket = std::make_shared< azmq::socket >( *m_ioservice, ZMQ_PUB );
 
     // Check for devices
     //
@@ -143,15 +160,16 @@ K4AStreamSender::K4AStreamSender(const Arguments &arguments) : Platform::Windowl
 
     Magnum::Debug{} << "Finished opening K4A device.";
 
-    // this component is always a publisher of data
-    m_zmq_context = std::make_shared<zmq::context_t>(ZMQNETWORK_IOTHREADS);
-    m_zmq_pub_socket = std::make_shared<zmq::socket_t>(*m_zmq_context, ZMQ_PUB );
-
-    // maybe add request/reply command socket here too
 
 }
 
+void K4AStreamSender::watchdogTimer() {
+    m_ioserviceKeepAlive->expires_from_now(boost::posix_time::seconds(1));
+    m_ioserviceKeepAlive->async_wait(boost::bind(&K4AStreamSender::watchdogTimer, this));
+}
+
 int K4AStreamSender::exec() {
+    int process_result{0};
     Magnum::Debug{} << "Start Kinect Streaming Client";
 
     // start zmq socket
@@ -160,7 +178,7 @@ int K4AStreamSender::exec() {
 
     try {
         m_zmq_pub_socket->bind(zmq_bind_str);
-    } catch (zmq::error_t &e) {
+    } catch (boost::system::system_error &e) {
         std::ostringstream log;
         Magnum::Error{} << "Error initializing ZMQNetwork: "  << zmq_bind_str;
         Magnum::Error{} << e.what();
@@ -200,44 +218,48 @@ int K4AStreamSender::exec() {
                     if (do_send_config) {
                         // depth model
                         {
+                            std::string name{"depth_model"};
                             std::ostringstream stream;
                             msgpack::packer<std::ostringstream> pk(&stream);
-                            pk.pack("depth_model");
+                            pk.pack(name);
+                            pk.pack(static_cast<int>(MeasurementType::CameraIntrinsics));
 
                             // measurement
                             pk.pack_array(2);
-                            pk.pack((unsigned long long) ts);
+                            pk.pack(static_cast<unsigned long long>(ts));
                             pk.pack(calibration.depth_camera_calibration);
 
                             pk.pack(ts);
 
-                            zmq::message_t message(stream.str().size());
-                            memcpy(message.data(), stream.str().data(), stream.str().size() );
-
-                            if (!m_zmq_pub_socket->send(message, zmq::send_flags::dontwait)) {
-                                Magnum::Error{} << "Error sending depth model";
-                            }
+                            azmq::message message(boost::asio::buffer(stream.str().data(), stream.str().size()));
+                            m_zmq_pub_socket->async_send(message, [&] (boost::system::error_code const& ec, size_t ) {
+                                if (ec != boost::system::error_code()) {
+                                    Magnum::Error{} << "Error sending message on ZMQSink " << name << " - " << ec.message();
+                                }
+                            });
                         }
 
                         // depth2color transform
                         {
+                            std::string name{"depth2color"};
                             std::ostringstream stream;
                             msgpack::packer<std::ostringstream> pk(&stream);
-                            pk.pack("depth2color");
+                            pk.pack(name);
+                            pk.pack(static_cast<int>(MeasurementType::Pose));
 
                             // measurement
                             pk.pack_array(2);
-                            pk.pack((unsigned long long) ts);
+                            pk.pack(static_cast<unsigned long long>(ts));
                             pk.pack(calibration.extrinsics[K4A_CALIBRATION_TYPE_DEPTH][K4A_CALIBRATION_TYPE_COLOR]);
 
                             pk.pack(ts);
 
-                            zmq::message_t message(stream.str().size());
-                            memcpy(message.data(), stream.str().data(), stream.str().size() );
-
-                            if (!m_zmq_pub_socket->send(message, zmq::send_flags::dontwait)) {
-                                Magnum::Error{} << "Error sending depth2color transform";
-                            }
+                            azmq::message message(boost::asio::buffer(stream.str().data(), stream.str().size()));
+                            m_zmq_pub_socket->async_send(message, [&] (boost::system::error_code const& ec, size_t ) {
+                                if (ec != boost::system::error_code()) {
+                                    Magnum::Error{} << "Error sending message on ZMQSink " << name << " - " << ec.message();
+                                }
+                            });
                         }
                     }
 
@@ -283,23 +305,25 @@ int K4AStreamSender::exec() {
                     if (do_send_config) {
                         // color model
                         {
+                            std::string name{"color_model"};
                             std::ostringstream stream;
                             msgpack::packer<std::ostringstream> pk(&stream);
-                            pk.pack("color_model");
+                            pk.pack(name);
+                            pk.pack(static_cast<int>(MeasurementType::CameraIntrinsics));
 
                             // measurement
                             pk.pack_array(2);
-                            pk.pack((unsigned long long) ts);
+                            pk.pack(static_cast<unsigned long long>(ts));
                             pk.pack(calibration.color_camera_calibration);
 
                             pk.pack(ts);
 
-                            zmq::message_t message(stream.str().size());
-                            memcpy(message.data(), stream.str().data(), stream.str().size() );
-
-                            if (!m_zmq_pub_socket->send(message, zmq::send_flags::dontwait)) {
-                                Magnum::Error{} << "Error sending color model";
-                            }
+                            azmq::message message(boost::asio::buffer(stream.str().data(), stream.str().size()));
+                            m_zmq_pub_socket->async_send(message, [&] (boost::system::error_code const& ec, size_t ) {
+                                if (ec != boost::system::error_code()) {
+                                    Magnum::Error{} << "Error sending message on ZMQSink " << name << " - " << ec.message();
+                                }
+                            });
                         }
                     }
                     NvPipe_Format nvpFormat{NVPIPE_RGBA32};
@@ -350,11 +374,23 @@ int K4AStreamSender::exec() {
             frame_number++;
         }
     } catch (std::exception &e) {
-        Magnum::Debug{} << "Exception: " << e.what();
-        return 1;
+        Magnum::Debug{} << "Exception in main-loop: " << e.what();
+        process_result = 1;
     }
-    m_dev.close();
-    return 0;
+
+    // tear down
+    try{
+        m_ioservice->stop();
+        m_NetworkThread->join();
+        m_NetworkThread.reset();
+        m_ioservice.reset();
+        m_dev.close();
+    } catch (std::exception &e) {
+        Magnum::Debug{} << "Exception while tearing down: " << e.what();
+        process_result = 1;
+    }
+
+    return process_result;
 }
 
 MAGNUM_WINDOWLESSAPPLICATION_MAIN(K4AStreamSender)

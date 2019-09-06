@@ -1,3 +1,5 @@
-add_subdirectory(sender)
-add_subdirectory(receiver)
-add_subdirectory(sender_opencv)
+add_subdirectory(rtsp_sender)
+add_subdirectory(rtsp_receiver)
+add_subdirectory(rtsp_sender_opencv)
+add_subdirectory(zmq_sender)
+add_subdirectory(zmq_receiver)

@@ -10,15 +10,20 @@ find_package(CUDA REQUIRED)
 
 set_directory_properties(PROPERTIES CORRADE_USE_PEDANTIC_FLAGS ON)
 
-add_executable(opencv_stream_sender opencv_stream_sender.cpp)
-set_property(TARGET opencv_stream_sender PROPERTY CXX_STANDARD 11)
+add_executable(k4a_rtsp_sender k4a_rtsp_sender.cpp ${CMAKE_SOURCE_DIR}/include/MsgpackSerialization.h)
+set_property(TARGET k4a_rtsp_sender PROPERTY CXX_STANDARD 11)
 
-target_link_libraries(opencv_stream_sender PRIVATE
+target_link_libraries(k4a_rtsp_sender PRIVATE
         CONAN_PKG::magnum
         CONAN_PKG::corrade
         CONAN_PKG::opencv
+        CONAN_PKG::msgpack
+        CONAN_PKG::Boost
+        CONAN_PKG::azmq
+        CONAN_PKG::kinect-azure-sensor-sdk
         CONAN_PKG::nvenc_rtsp
 )
-target_include_directories(opencv_stream_sender
+target_include_directories(k4a_rtsp_sender
         PRIVATE ${CUDA_INCLUDE_DIRS}
+        ${CMAKE_SOURCE_DIR}/include
         )
