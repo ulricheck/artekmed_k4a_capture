@@ -12,6 +12,7 @@ target_link_libraries(k4a_zmq_receiver PRIVATE
         CONAN_PKG::opencv
         CONAN_PKG::Boost
         CONAN_PKG::nvpipe
+        CONAN_PKG::h264bitstream
         CONAN_PKG::azmq
 )
 target_include_directories(k4a_zmq_receiver

@@ -34,6 +34,11 @@
 
 using namespace Magnum;
 
+#define MAX_NALUNITS_PER_FRAME 100
+
+int get_nal_package(const uint8_t* buffer, int64_t maxSize, int* head, int* tail);
+int find_start_code_position(const uint8_t* buffer, int data_size, int offset);
+
 
 class K4AStreamSender : public Platform::WindowlessApplication {
 public:
@@ -73,6 +78,7 @@ private:
     unsigned int m_framerate{30};
 
     bool m_debug{false};
+    bool m_display{false};
 
     bool m_depthStreamEnabled{true};
     bool m_colorStreamEnabled{true};
@@ -89,6 +95,7 @@ K4AStreamSender::K4AStreamSender(const Arguments &arguments) : Platform::Windowl
         .addBooleanOption("debug").setHelp("debug", "Show debug windows")
         .addBooleanOption("nodepth").setHelp("nodepth", "Skip depth stream")
         .addBooleanOption("nocolor").setHelp("nocolor", "Skip color stream")
+        .addBooleanOption("display").setHelp("display", "Display videos")
         .addSkippedPrefix("magnum", "engine-specific options");
 
     args.parse(arguments.argc, arguments.argv);
@@ -99,6 +106,7 @@ K4AStreamSender::K4AStreamSender(const Arguments &arguments) : Platform::Windowl
     m_dstColorPort = args.value<Magnum::Int>("colorport");
     m_dstConfigPort = args.value<Magnum::Int>("configport");
     m_debug = args.isSet("debug");
+    m_display = args.isSet("display");
     m_depthStreamEnabled = !args.isSet("nodepth");
     m_colorStreamEnabled = !args.isSet("nocolor");
 
@@ -225,7 +233,7 @@ int K4AStreamSender::exec() {
 
     // start streaming
     try{
-        if (m_debug) {
+        if (m_display) {
             cv::namedWindow("ColorImage",cv::WINDOW_NORMAL);
             cv::namedWindow("DepthImage",cv::WINDOW_NORMAL);
         }
@@ -336,33 +344,34 @@ int K4AStreamSender::exec() {
 
                     bool haveNewFrame{false};
                     uint64_t encodedBufferSize{0};
-                    if (m_depthBufferIndex.fetch_add(1, std::memory_order_relaxed) == 0) {
+                    unsigned int bi{0};
+                    if (m_depthBufferIndex.compare_exchange_weak(bi, 0, std::memory_order_relaxed)) {
                         std::atomic_thread_fence(std::memory_order_acquire);
 
-                        encodedBufferSize = NvPipe_Encode(m_depthStreamEncoder, depthImage.data, dataPitch, m_depthBuffer.data(), m_depthBuffer.size(), w, h, false);
+                        encodedBufferSize = NvPipe_Encode(m_depthStreamEncoder, depthImage.data, dataPitch, m_depthBuffer.data(), m_depthBuffer.size(), w, h, true);
                         if (encodedBufferSize == 0) {
                             Magnum::Error{} << "Encode error depth: " << NvPipe_GetError(m_depthStreamEncoder);
                             return 1;
                         }
                         haveNewFrame = true;
                     } else {
-                        Magnum::Debug{} << "Need double buffering to avoid local copies";
+                        Magnum::Error{} << "Need double buffering to avoid local copies";
+//                        return 1;
                     }
 
                     if (haveNewFrame) {
-                        azmq::message message(azmq::nocopy, boost::asio::buffer(&m_depthBuffer[0], encodedBufferSize), static_cast<void*>(&m_depthBufferIndex), [](void *, void *hint){
+                        m_depthBufferIndex++;
+//                            Magnum::Debug{} << "acquire buffer range depth " << m_depthBufferIndex.load();
+
+                        azmq::message message(azmq::nocopy, boost::asio::buffer(m_depthBuffer.data(), m_depthBuffer.size()), static_cast<void*>(&m_depthBufferIndex), [](void *, void *hint){
                             if (hint != nullptr) {
                                 auto b = static_cast<std::atomic<unsigned int>*>(hint);
-                                if ((*b).fetch_sub(1, std::memory_order_release) == 1) {
-                                    std::atomic_thread_fence(std::memory_order_acquire);
-                                    // all good !!
-                                } else {
-                                    Magnum::Debug{} << "Need double buffering to avoid local copies";
-                                }
+                                (*b)--;
+//                                    Magnum::Debug{} << "free buffer range depth " << (*b).load();
                             }
                         });
 
-                        // multipart message (header/body) ??
+                        // should we use a multipart message ??
                         // flags = ZMQ_SNDMORE
                         m_zmq_depth_stream_socket->async_send(message, [&] (boost::system::error_code const& ec, size_t ) {
                             if (ec != boost::system::error_code()) {
@@ -372,7 +381,10 @@ int K4AStreamSender::exec() {
                     }
 
                     if (m_debug) {
-                        Magnum::Debug{} << "got depth image: " << ts << "elemSize: " << depthImage.elemSize()  << "elemSize1: " << depthImage.elemSize1();
+                        Magnum::Debug{} << "got depth image: " << ts << "elemSize: " << depthImage.elemSize()
+                                        << "size: " << depthImage.size();
+                    }
+                    if (m_display) {
                         cv::imshow("DepthImage", depthImage);
                     }
                 }
@@ -447,32 +459,33 @@ int K4AStreamSender::exec() {
 
                     bool haveNewFrame{false};
                     uint64_t encodedBufferSize{0};
-                    if (m_colorBufferIndex.fetch_add(1, std::memory_order_relaxed) == 0) {
+                    unsigned int bi{0};
+                    if (m_colorBufferIndex.compare_exchange_weak(bi, 0, std::memory_order_relaxed)) {
                         std::atomic_thread_fence(std::memory_order_acquire);
 
-                        encodedBufferSize = NvPipe_Encode(m_colorStreamEncoder, colorImage.data, dataPitch, m_colorBuffer.data(), m_colorBuffer.size(), w, h, false);
+                        encodedBufferSize = NvPipe_Encode(m_colorStreamEncoder, colorImage.data, dataPitch, m_colorBuffer.data(), m_colorBuffer.size(), w, h, true);
                         if (encodedBufferSize == 0) {
                             Magnum::Error{} << "Encode error color: " << NvPipe_GetError(m_colorStreamEncoder);
                             return 1;
                         }
                         haveNewFrame = true;
                     } else {
-                        Magnum::Debug{} << "Need double buffering to avoid local copies";
+                        Magnum::Error{} << "Need double buffering to avoid local copies";
+//                        return 1;
                     }
 
                     if (haveNewFrame) {
-                        azmq::message message(azmq::nocopy, boost::asio::buffer(&m_colorBuffer[0], encodedBufferSize), static_cast<void*>(&m_colorBufferIndex), [](void *, void *hint){
+                        m_colorBufferIndex++;
+                        azmq::message message(azmq::nocopy, boost::asio::buffer(m_colorBuffer.data(), m_colorBuffer.size()), static_cast<void*>(&m_colorBufferIndex), [](void *, void *hint){
                             if (hint != nullptr) {
                                 auto b = static_cast<std::atomic<unsigned int>*>(hint);
-                                if ((*b).fetch_sub(1, std::memory_order_release) == 1) {
-                                    std::atomic_thread_fence(std::memory_order_acquire);
-                                    // all good !!
-                                } else {
-                                    Magnum::Debug{} << "Need double buffering to avoid local copies";
-                                }
+                                (*b)--;
+//                                    Magnum::Debug{} << "free buffer range color " << (*b).load();
                             }
                         });
 
+                        // multipart message (header/body) ??
+                        // flags = ZMQ_SNDMORE
                         m_zmq_color_stream_socket->async_send(message, [&] (boost::system::error_code const& ec, size_t ) {
                             if (ec != boost::system::error_code()) {
                                 Magnum::Error{} << "Error sending color buffer - " << ec.message();
@@ -480,9 +493,10 @@ int K4AStreamSender::exec() {
                         });
                     }
 
-
                     if (m_debug) {
-                        Magnum::Debug{} << "got color images: " << ts << "elemSize: " << colorImage.elemSize()  << "elemSize1: " << colorImage.elemSize1();
+                        Magnum::Debug{} << "got color images: " << ts << "elemSize: " << colorImage.elemSize()  << "size: " << colorImage.size();
+                    }
+                    if (m_display) {
                         cv::Mat rgb;
                         cv::cvtColor(colorImage, rgb, cv::COLOR_RGBA2BGR);
                         cv::imshow("ColorImage", rgb);
@@ -516,6 +530,48 @@ int K4AStreamSender::exec() {
     }
 
     return process_result;
+}
+
+
+int get_nal_package(const uint8_t* buffer, int64_t maxSize, int* head, int* tail)
+{
+    if (maxSize == 0) {
+        return -1;
+    }
+
+    *head = 0;
+    *tail = 0;
+
+    int start = find_start_code_position(buffer, maxSize, *tail);
+    int end = find_start_code_position(buffer, maxSize, start + 1);
+
+    if(end < 0) end = maxSize;
+
+    *head = start;
+    *tail = end;
+    return end - start;
+}
+
+
+int find_start_code_position(const uint8_t* buffer, int data_size, int offset)
+{
+    assert(offset < data_size);
+
+    /* Simplified Boyer-Moore, inspired by gstreamer */
+    while (offset < data_size - 2) {
+        if (buffer[offset + 2] == 0x1) {
+            if (buffer[offset] == 0x0 && buffer[offset + 1] == 0x0) {
+                return offset;
+            }
+            offset += 3;
+        } else if (buffer[offset + 2] == 0x0) {
+            offset++;
+        } else {
+            offset += 3;
+        }
+    }
+
+    return -1;
 }
 
 MAGNUM_WINDOWLESSAPPLICATION_MAIN(K4AStreamSender)

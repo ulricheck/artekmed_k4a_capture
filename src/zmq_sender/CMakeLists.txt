@@ -17,11 +17,11 @@ target_link_libraries(k4a_zmq_sender PRIVATE
         CONAN_PKG::magnum
         CONAN_PKG::corrade
         CONAN_PKG::opencv
+        CONAN_PKG::nvpipe
         CONAN_PKG::msgpack
         CONAN_PKG::Boost
         CONAN_PKG::azmq
         CONAN_PKG::kinect-azure-sensor-sdk
-        CONAN_PKG::nvenc_rtsp
 )
 target_include_directories(k4a_zmq_sender
         PRIVATE ${CUDA_INCLUDE_DIRS}

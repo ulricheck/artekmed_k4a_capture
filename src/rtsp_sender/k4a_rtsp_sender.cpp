@@ -97,8 +97,8 @@ K4AStreamSender::K4AStreamSender(const Arguments &arguments) : Platform::Windowl
 
     // start communication services
     Magnum::Debug{} << "Create IOService";
-    m_ioservice.reset(new boost::asio::io_service());
-    m_ioserviceKeepAlive.reset(new boost::asio::deadline_timer(*m_ioservice));
+    m_ioservice = std::make_shared<boost::asio::io_service>();
+    m_ioserviceKeepAlive = std::make_shared<boost::asio::deadline_timer>(*m_ioservice);
     watchdogTimer();
     m_NetworkThread = std::make_shared< std::thread >( [&]{ m_ioservice->run(); } );
     m_zmq_pub_socket = std::make_shared< azmq::socket >( *m_ioservice, ZMQ_PUB );
@@ -270,7 +270,7 @@ int K4AStreamSender::exec() {
 
                     switch (inputImage.get_format()) {
                         case K4A_IMAGE_FORMAT_DEPTH16:
-                            depthImage = cv::Mat(cv::Size(w, h), CV_16UC1, (void *)inputImage.get_buffer(), cv::Mat::AUTO_STEP);
+                            depthImage = cv::Mat(cv::Size(w, h), CV_16UC1, const_cast<void*>(static_cast<const void*>(inputImage.get_buffer())), cv::Mat::AUTO_STEP);
                             nvpFormat = NVPIPE_UINT16;
                             break;
 
@@ -333,7 +333,7 @@ int K4AStreamSender::exec() {
                     switch (inputImage.get_format()) {
                         case K4A_IMAGE_FORMAT_COLOR_BGRA32:
                         {
-                            auto tmpImage = cv::Mat(cv::Size(w, h), CV_8UC4, (void *)inputImage.get_buffer(), cv::Mat::AUTO_STEP);
+                            auto tmpImage = cv::Mat(cv::Size(w, h), CV_8UC4, const_cast<void*>(static_cast<const void*>(inputImage.get_buffer())), cv::Mat::AUTO_STEP);
                             cv::cvtColor(tmpImage, colorImage, cv::COLOR_BGRA2RGBA);
                             nvpFormat = NVPIPE_RGBA32;
                         }

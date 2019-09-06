@@ -23,6 +23,7 @@
 
 #include <opencv2/opencv.hpp>
 #include <NvPipe.h>
+#include "h264_stream.h"
 
 #include <boost/asio.hpp>
 #include <boost/bind.hpp>
@@ -94,6 +95,9 @@ private:
     std::atomic<unsigned int> m_colorBufferIndex{0};
     std::atomic<unsigned int> m_depthBufferIndex{0};
 
+    std::shared_ptr<h264_stream_t> m_h264parser_depth;
+    std::shared_ptr<h264_stream_t> m_h264parser_color;
+
     std::shared_ptr<std::thread > m_NetworkThread;
     std::shared_ptr<boost::asio::io_service> m_ioservice;
     std::shared_ptr<boost::asio::deadline_timer> m_ioserviceKeepAlive;
@@ -112,6 +116,8 @@ private:
     std::string m_colorStreamUrl;
 
     bool m_debug{false};
+    bool m_display{false};
+
     bool m_depthStreamEnabled{true};
     bool m_colorStreamEnabled{true};
 };
@@ -126,6 +132,7 @@ K4AStreamReceiver::K4AStreamReceiver(const Arguments &arguments) : Platform::Glf
         .addBooleanOption("debug").setHelp("debug", "Show debug windows")
         .addBooleanOption("nodepth").setHelp("nodepth", "Skip depth stream")
         .addBooleanOption("nocolor").setHelp("nocolor", "Skip color stream")
+        .addBooleanOption("display").setHelp("display", "Display images")
         .addSkippedPrefix("magnum", "engine-specific options");
 
     args.parse(arguments.argc, arguments.argv);
@@ -135,6 +142,7 @@ K4AStreamReceiver::K4AStreamReceiver(const Arguments &arguments) : Platform::Glf
     unsigned int srcColorPort = args.value<Magnum::Int>("colorport");
     unsigned int srcConfigPort = args.value<Magnum::Int>("configport");
     m_debug = args.isSet("debug");
+    m_display = args.isSet("display");
     m_depthStreamEnabled = !args.isSet("nodepth");
     m_colorStreamEnabled = !args.isSet("nocolor");
 
@@ -152,6 +160,10 @@ K4AStreamReceiver::K4AStreamReceiver(const Arguments &arguments) : Platform::Glf
     m_zmq_depth_stream_socket = std::make_shared< azmq::socket >( *m_ioservice, ZMQ_SUB );
     m_zmq_color_stream_socket = std::make_shared< azmq::socket >( *m_ioservice, ZMQ_SUB );
 
+    m_h264parser_depth.reset(h264_new());
+    m_h264parser_color.reset(h264_new());
+
+
     // request config via req/rep here to get resolution/intrincics ..
 
 
@@ -161,7 +173,7 @@ K4AStreamReceiver::K4AStreamReceiver(const Arguments &arguments) : Platform::Glf
         m_zmq_depth_stream_socket->set_option(azmq::socket::subscribe(""));
         receiveDepthFrame();
 
-        if (m_debug) {
+        if (m_display) {
             cv::namedWindow("DepthImage",cv::WINDOW_NORMAL);
         }
     }
@@ -171,7 +183,7 @@ K4AStreamReceiver::K4AStreamReceiver(const Arguments &arguments) : Platform::Glf
         m_zmq_color_stream_socket->set_option(azmq::socket::subscribe(""));
         receiveColorFrame();
 
-        if (m_debug) {
+        if (m_display) {
             cv::namedWindow("ColorImage",cv::WINDOW_NORMAL);
         }
     }
@@ -219,40 +231,67 @@ void K4AStreamReceiver::receiveDepthFrame() {
                 m_depthBuffer.resize(w * h * bytesPerPixel);
             }
 
-            uint64_t size = NvPipe_Decode(m_depthStreamDecoder, static_cast<const uint8_t*>(message.data()), message.size(), &m_depthBuffer[0], w, h);
-            if (size == 0) {
-                Magnum::Error{} << "Decode error depth: " << NvPipe_GetError(m_depthStreamDecoder);
-                // need to handle failure ..
-                return;
-            }
+            // parse stream
+            size_t rsz = 0;
+            size_t sz = message.size();
+            int64_t off = 0;
 
-            auto mat = cv::Mat({w,h}, CV_16UC1, &m_depthBuffer[0], cv::Mat::AUTO_STEP);
+            // should change the library function ..
+            uint8_t* p = const_cast<uint8_t*>(static_cast<const uint8_t*>(message.data()));
 
-            Magnum::Debug{} << "Received Depth Image: " << ts << " size: " << mat.size();
-            std::lock_guard<std::mutex> lock(m_receiverWriteLock);
+            int nal_start, nal_end;
 
-            bool frameStored{false};
-            for (Frame &frame: m_receiveQueue) {
-                if (!frame.have_depthImage) {
-                    if (frame.timestamp == ts) {
-                        frame.have_depthImage = true;
-                        frame.depthImage = mat;
-                        Magnum::Debug{} << "Completed Frame with depthImage " << ts;
-                        frameStored = true;
-                        break;
+            while (find_nal_unit(p, sz, &nal_start, &nal_end) > 0)
+            {
+                p += nal_start;
+                int nal_unit_type = peek_nal_unit(m_h264parser_color.get(), p, nal_end - nal_start);
+
+                // only send "Coded slice of an IDR picture" packages to decoder
+                if (nal_unit_type == 5) {
+
+                    uint64_t size = NvPipe_Decode(m_depthStreamDecoder, p,nal_end - nal_start, m_depthBuffer.data(), w, h);
+                    if (size == 0) {
+                        Magnum::Error{} << "Decode error depth: " << NvPipe_GetError(m_depthStreamDecoder);
                     } else {
-                        Magnum::Debug{} << "Have frame non-matching timestamp: " << frame.timestamp << " != " << ts;
+                        auto mat = cv::Mat({w,h}, CV_16UC1, &m_depthBuffer[0], cv::Mat::AUTO_STEP);
+
+                        if (m_debug) {
+                            Magnum::Debug{} << "Received Depth Image: " << ts << " size: " << mat.size();
+                        }
+                        std::lock_guard<std::mutex> lock(m_receiverWriteLock);
+
+                        bool frameStored{false};
+                        for (Frame &frame: m_receiveQueue) {
+                            if (!frame.have_depthImage) {
+                                if (frame.timestamp == ts) {
+                                    frame.have_depthImage = true;
+                                    frame.depthImage = mat;
+                                    if (m_debug) {
+                                        Magnum::Debug{} << "Completed Frame with depthImage " << ts;
+                                    }
+                                    frameStored = true;
+                                    break;
+                                } else {
+                                    Magnum::Debug{} << "Have frame non-matching timestamp: " << frame.timestamp << " != " << ts;
+                                }
+                            }
+                        }
+
+                        if (!frameStored) {
+                            Frame frame;
+                            frame.have_depthImage = true;
+                            frame.timestamp = ts;
+                            frame.depthImage = mat;
+                            if (m_debug) {
+                                Magnum::Debug{} << "Created Frame with depthImage " << ts;
+                            }
+                            m_receiveQueue.push_back(std::move(frame));
+                        }
                     }
                 }
-            }
 
-            if (!frameStored) {
-                Frame frame;
-                frame.have_depthImage = true;
-                frame.timestamp = ts;
-                frame.depthImage = mat;
-                Magnum::Debug{} << "Created Frame with depthImage " << ts;
-                m_receiveQueue.push_back(std::move(frame));
+                p += (nal_end - nal_start);
+                sz -= nal_end;
             }
         }
         // wait for next message
@@ -283,45 +322,69 @@ void K4AStreamReceiver::receiveColorFrame() {
                     // need to handle failure ..
                     return;
                 }
-                m_depthBuffer.resize(w * h * bytesPerPixel);
+                m_colorBuffer.resize(w * h * bytesPerPixel);
             }
 
-            uint64_t size = NvPipe_Decode(m_colorStreamDecoder, static_cast<const uint8_t*>(message.data()), message.size(), &m_colorBuffer[0], w, h);
-            if (size == 0) {
-                Magnum::Error{} << "Decode error depth: " << NvPipe_GetError(m_colorStreamDecoder);
-                // need to handle failure ..
-                return;
-            }
 
-            auto mat = cv::Mat({w,h}, CV_8UC4, &m_colorBuffer[0], cv::Mat::AUTO_STEP);
+            size_t rsz = 0;
+            size_t sz = message.size();
+            int64_t off = 0;
 
-            Magnum::Debug{} << "Received Color Image: " << ts << " size: " << mat.size();
-            std::lock_guard<std::mutex> lock(m_receiverWriteLock);
+            // should change the library function ..
+            uint8_t* p = const_cast<uint8_t*>(static_cast<const uint8_t*>(message.data()));
 
-            bool frameStored{false};
-            for (Frame &frame: m_receiveQueue) {
-                if (!frame.have_colorImage) {
-                    if (frame.timestamp == ts) {
-                        frame.have_colorImage = true;
-                        frame.colorImage = mat;
-                        Magnum::Debug{} << "Completed Frame with colorImage " << ts;
-                        frameStored = true;
-                        break;
-                    } else {
-                        Magnum::Debug{} << "Have frame non-matching timestamp: " << frame.timestamp << " != " << ts;
+            int nal_start, nal_end;
+
+            while (find_nal_unit(p, sz, &nal_start, &nal_end) > 0)
+            {
+                p += nal_start;
+                int nal_unit_type = peek_nal_unit(m_h264parser_color.get(), p, nal_end - nal_start);
+                // only send "Coded slice of an IDR picture" packages to decoder
+                if (nal_unit_type == 5) {
+                    uint64_t size = NvPipe_Decode(m_colorStreamDecoder, static_cast<const uint8_t*>(message.data()), message.size(), m_colorBuffer.data(), w, h);
+                    if (size == 0) {
+                        Magnum::Error{} << "Decode error color: " << NvPipe_GetError(m_colorStreamDecoder);
+                    }  else {
+                        auto mat = cv::Mat({w,h}, CV_8UC4, &m_colorBuffer[0], cv::Mat::AUTO_STEP);
+
+                        if (m_debug) {
+                            Magnum::Debug{} << "Received Color Image: " << ts << " size: " << mat.size();
+                        }
+                        std::lock_guard<std::mutex> lock(m_receiverWriteLock);
+
+                        bool frameStored{false};
+                        for (Frame &frame: m_receiveQueue) {
+                            if (!frame.have_colorImage) {
+                                if (frame.timestamp == ts) {
+                                    frame.have_colorImage = true;
+                                    frame.colorImage = mat;
+                                    if (m_debug) {
+                                        Magnum::Debug{} << "Completed Frame with colorImage " << ts;
+                                    }
+                                    frameStored = true;
+                                    break;
+                                } else {
+                                    Magnum::Debug{} << "Have frame non-matching timestamp: " << frame.timestamp << " != " << ts;
+                                }
+                            }
+                        }
+
+                        if (!frameStored) {
+                            Frame frame;
+                            frame.have_colorImage = true;
+                            frame.timestamp = ts;
+                            frame.colorImage = mat;
+                            if (m_debug) {
+                                Magnum::Debug{} << "Created Frame with colorImage " << ts;
+                            }
+                            m_receiveQueue.push_back(std::move(frame));
+                        }
                     }
                 }
+                p += (nal_end - nal_start);
+                sz -= nal_end;
             }
-
-            if (!frameStored) {
-                Frame frame;
-                frame.have_colorImage = true;
-                frame.timestamp = ts;
-                frame.colorImage = mat;
-                Magnum::Debug{} << "Created Frame with colorImage " << ts;
-                m_receiveQueue.push_back(std::move(frame));
-            }
-        }
+         }
         // wait for next message
         receiveColorFrame();
     });
@@ -334,12 +397,14 @@ void K4AStreamReceiver::drawEvent() {
     if (!m_resultQueue.empty()) {
         auto frame = m_resultQueue.front();
         m_resultQueue.pop_front();
-        Magnum::Debug{} << "Received complete frame for rendering: " << frame.timestamp;
+        if (m_debug) {
+            Magnum::Debug{} << "Received complete frame for rendering: " << frame.timestamp;
+        }
         if (frame.is_valid) {
-            if ((m_debug) && (frame.have_depthImage)) {
+            if ((m_display) && (frame.have_depthImage)) {
                 cv::imshow("DepthImage", frame.depthImage);
             }
-            if ((m_debug) && (frame.have_colorImage)) {
+            if ((m_display) && (frame.have_colorImage)) {
                 cv::Mat displImage;
                 cv::cvtColor(frame.colorImage, displImage, cv::COLOR_RGBA2BGR);
                 cv::imshow("ColorImage", displImage);
